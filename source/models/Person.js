@@ -1,12 +1,19 @@
 const MongoContext = require("../services/MongoContext");
 const uuid = require("uuid");
 
-module.exports = (function (context) {
+module.exports = (function () {
     const name = "people";
+
+    async function list() {
+        const collection = await MongoContext.collection(name);
+        const cursor = await collection.find({});
+        const results = await cursor.toArray();
+        return results.map(map);
+    }
 
     async function create(person) {
         const id = uuid.v4();
-        const created = Date.now();
+        const effective = Date.now();
         const collection = await MongoContext.collection(name);
 
         const result = await collection.insertOne({
@@ -17,7 +24,7 @@ module.exports = (function (context) {
                     lastName: person.lastName,
                     email: person.email,
                     age: person.age,
-                    created
+                    effective
                 }
             ],
             updateId: 1
@@ -39,7 +46,7 @@ module.exports = (function (context) {
 
         const document = await cursor.next();
 
-        return map(document, version || 1);
+        return map(document, version);
     }
 
     async function update(id, person) {
@@ -65,19 +72,13 @@ module.exports = (function (context) {
             returnOriginal: false
         });
 
-        return {
-            id,
-            ...person,
-            effective,
-            revision: document.value.revisions.length
-        }
+        return map(document);
     }
 
-    async function list() {
+    async function remove(id) {
         const collection = await MongoContext.collection(name);
-        const cursor = await collection.find({});
-        const results = await cursor.toArray();
-        return results.map(map);
+        const result = await collection.findOneAndDelete({ id });
+        return map(result.value);
     }
 
     function map(document, version) {
@@ -98,15 +99,9 @@ module.exports = (function (context) {
             lastName: revision.lastName,
             email: revision.email,
             age: revision.age,
-            created: revision.created,
+            effective: revision.effective,
             revision: index
         };
-    }
-
-    async function remove(id) {
-        const collection = await MongoContext.collection(name);
-        const result = await collection.findOneAndDelete({ id });
-        return map(result.value);
     }
 
     return {
