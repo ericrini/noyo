@@ -1,8 +1,44 @@
 const MongoContext = require("../services/MongoContext");
 const uuid = require("uuid");
+const Ajv = require("ajv");
+const NotFoundError = require("../errors/NotFoundError");
+const BadRequestError = require("../errors/BadRequestError");
 
 module.exports = (function () {
     const name = "people";
+
+    var schema = new Ajv().compile({
+        type: "object",
+        properties: {
+            firstName: {
+                type: "string"
+            },
+            lastName: {
+                type: "string"
+            },
+            age: {
+                type: "integer",
+                minimum: 0
+            },
+            email: {
+                type: "string",
+                format: "email"
+            }
+        },
+        required: [
+            "firstName",
+            "lastName",
+            "age",
+            "email"
+        ]
+    });
+
+    function validate(person) {
+        if (!schema(person)) {
+            const error = schema.errors[0];
+            throw new BadRequestError(error.message);
+        }
+    }
 
     async function list() {
         const collection = await MongoContext.collection(name);
@@ -15,6 +51,8 @@ module.exports = (function () {
         const id = uuid.v4();
         const effective = Date.now();
         const collection = await MongoContext.collection(name);
+
+        validate(person);
 
         const result = await collection.insertOne({
             id,
@@ -41,19 +79,19 @@ module.exports = (function () {
         });
 
         if (!await cursor.hasNext()) {
-            return null;
+            throw new NotFoundError(`Unable to read person ${id} because it was not found.`);
         }
 
-        const document = await cursor.next();
-
-        return map(document, version);
+        return map(await cursor.next(), version);
     }
 
     async function update(id, person) {
         const collection = await MongoContext.collection("people");
         const effective = Date.now();
 
-        const document = await collection.findOneAndUpdate({
+        validate(person);
+
+        const result = await collection.findOneAndUpdate({
             id
         }, {
             $push: {
@@ -72,25 +110,30 @@ module.exports = (function () {
             returnOriginal: false
         });
 
-        return map(document);
+        if (!result.value) {
+            throw new NotFoundError(`Unable to update person ${id} because it was not found.`);
+        }
+
+        return map(result.value);
     }
 
     async function remove(id) {
         const collection = await MongoContext.collection(name);
         const result = await collection.findOneAndDelete({ id });
+
+        if (!result.value) {
+            throw new NotFoundError(`Unable to delete person ${id} because it was not found.`);
+        }
+
         return map(result.value);
     }
 
     function map(document, version) {
-        if (!document.revisions) {
-            return null;
-        }
-
         const index = version || document.revisions.length;
         const revision = document.revisions[index - 1];
 
         if (!revision) {
-            return null;
+            throw new NotFoundError(`Unable to retrieve revision ${index} from person ${document.id} because the revision was not found.`, index);
         }
 
         return {
